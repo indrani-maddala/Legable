@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Source Sans 3", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Source Serif 4", Georgia, "Times New Roman", serif;
+
+  --color-navy: #0b2545;
+  --color-navy-800: #12325c;
+  --color-navy-700: #1a4072;
+  --color-navy-600: #25508a;
+  --color-saffron: #ff9933;
+  --color-india-green: #138808;
+  --color-gov-gold: #c9a227;
+  --color-surface: #f3f5f8;
+  --color-compliant: #0f7b3a;
+  --color-attention: #c47b00;
+  --color-noncompliant: #b42318;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--color-surface);
+  color: var(--color-navy);
+}
