@@ -2,8 +2,10 @@ import {
   AlertCircle,
   ArrowLeft,
   Camera,
+  CheckCircle2,
   FileImage,
   ScanSearch,
+  Sparkles,
   Upload,
   X,
 } from 'lucide-react';
@@ -12,6 +14,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Card, { CardBody } from '../components/ui/Card';
 import { ROUTES } from '../constants/routes';
+import { DEMO_SAMPLES, useScan } from '../context/ScanContext';
 import { cn } from '../utils/cn';
 
 const ALLOWED_TYPES = ['image/jpeg', 'image/png'];
@@ -47,6 +50,7 @@ function validateImageFile(file) {
 
 export default function ScanProduct() {
   const navigate = useNavigate();
+  const { startScan, loadDemoSample, resetScan } = useScan();
   const uploadInputRef = useRef(null);
   const cameraInputRef = useRef(null);
   const [file, setFile] = useState(null);
@@ -56,7 +60,9 @@ export default function ScanProduct() {
 
   useEffect(() => {
     return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
     };
   }, [previewUrl]);
 
@@ -70,7 +76,9 @@ export default function ScanProduct() {
     setError('');
     setFile(nextFile);
     setPreviewUrl((currentUrl) => {
-      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      if (currentUrl && currentUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(currentUrl);
+      }
       return URL.createObjectURL(nextFile);
     });
   }
@@ -92,9 +100,35 @@ export default function ScanProduct() {
     setFile(null);
     setError('');
     setPreviewUrl((currentUrl) => {
-      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      if (currentUrl && currentUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(currentUrl);
+      }
       return '';
     });
+    resetScan();
+  }
+
+  function handleAnalyze() {
+    if (!file && !previewUrl) {
+      setError('Please select or upload a label image before analyzing.');
+      return;
+    }
+    // Save image and preview to ScanContext
+    startScan(file, previewUrl);
+    navigate(ROUTES.PROCESSING);
+  }
+
+  function handleSelectDemo(sample) {
+    setError('');
+    loadDemoSample(sample.id);
+    setFile({
+      name: sample.fileName,
+      size: 1024 * 350,
+      type: 'image/jpeg',
+      isDemo: true,
+      demoId: sample.id,
+    });
+    setPreviewUrl(sample.previewUrl);
   }
 
   return (
@@ -108,9 +142,8 @@ export default function ScanProduct() {
             Scan a Packaged Product
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-relaxed text-navy/70 sm:text-base">
-            Upload or capture a clear photo of the product label. LEGABLE will
-            use this image to check mandatory declarations. OCR is not connected
-            yet — this step only collects the label image.
+            Upload or capture a clear photo of the product label. LEGABLE inspects
+            the packaging for the 8 mandatory Legal Metrology declarations.
           </p>
         </div>
         <Button as={Link} to={ROUTES.DASHBOARD} variant="outline" className="shrink-0">
@@ -132,66 +165,107 @@ export default function ScanProduct() {
       <Card>
         <CardBody className="p-4 sm:p-6">
           {!file ? (
-            <div
-              className={cn(
-                'flex min-h-[280px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-4 py-10 text-center transition-colors sm:min-h-[340px]',
-                isDragging
-                  ? 'border-saffron bg-saffron/10'
-                  : 'border-navy/20 bg-surface hover:border-navy/40',
-              )}
-              onClick={() => uploadInputRef.current?.click()}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setIsDragging(true);
-              }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={handleDrop}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
+            <div className="space-y-6">
+              <div
+                className={cn(
+                  'flex min-h-[280px] cursor-pointer flex-col items-center justify-center rounded-lg border-2 border-dashed px-4 py-10 text-center transition-colors sm:min-h-[320px]',
+                  isDragging
+                    ? 'border-saffron bg-saffron/10'
+                    : 'border-navy/20 bg-surface hover:border-navy/40',
+                )}
+                onClick={() => uploadInputRef.current?.click()}
+                onDragOver={(event) => {
                   event.preventDefault();
-                  uploadInputRef.current?.click();
-                }
-              }}
-              role="button"
-              tabIndex={0}
-              aria-label="Upload a product label image"
-            >
-              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-navy/10 text-navy">
-                <Upload className="h-7 w-7" aria-hidden="true" />
-              </span>
-              <p className="mt-4 font-display text-xl font-semibold text-navy">
-                Drag and drop a label image
-              </p>
-              <p className="mt-2 max-w-md text-sm text-navy/65">
-                Drop a photo here, or use the buttons below to upload from your
-                device or open the camera.
-              </p>
-              <p className="mt-4 text-xs font-medium tracking-wide text-navy/50 uppercase">
-                Supported formats: JPG, JPEG, PNG · Max 10 MB
-              </p>
-
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-                <Button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
                     uploadInputRef.current?.click();
-                  }}
-                >
-                  <Upload className="h-4 w-4" aria-hidden="true" />
-                  Upload Image
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    cameraInputRef.current?.click();
-                  }}
-                >
-                  <Camera className="h-4 w-4" aria-hidden="true" />
-                  Use Camera
-                </Button>
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                aria-label="Upload a product label image"
+              >
+                <span className="flex h-14 w-14 items-center justify-center rounded-full bg-navy/10 text-navy">
+                  <Upload className="h-7 w-7" aria-hidden="true" />
+                </span>
+                <p className="mt-4 font-display text-xl font-semibold text-navy">
+                  Drag and drop a label image
+                </p>
+                <p className="mt-2 max-w-md text-sm text-navy/65">
+                  Drop a photo here, or use the buttons below to upload from your
+                  device or open the camera.
+                </p>
+                <p className="mt-4 text-xs font-medium tracking-wide text-navy/50 uppercase">
+                  Supported formats: JPG, JPEG, PNG · Max 10 MB
+                </p>
+
+                <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                  <Button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      uploadInputRef.current?.click();
+                    }}
+                  >
+                    <Upload className="h-4 w-4" aria-hidden="true" />
+                    Upload Image
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      cameraInputRef.current?.click();
+                    }}
+                  >
+                    <Camera className="h-4 w-4" aria-hidden="true" />
+                    Use Camera
+                  </Button>
+                </div>
+              </div>
+
+              {/* Instant Demo Presets Strip */}
+              <div className="rounded-lg border border-navy/10 bg-surface/60 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles className="h-4 w-4 text-saffron" />
+                  <p className="text-xs font-semibold uppercase tracking-wider text-navy">
+                    Try Demo Packaging Samples
+                  </p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {DEMO_SAMPLES.map((sample) => (
+                    <button
+                      key={sample.id}
+                      type="button"
+                      onClick={() => handleSelectDemo(sample)}
+                      className="flex flex-col items-start rounded-md border border-navy/10 bg-white p-3 text-left transition hover:border-saffron hover:shadow-xs"
+                    >
+                      <span className="text-xs font-semibold text-navy line-clamp-1">
+                        {sample.name}
+                      </span>
+                      <span
+                        className={`mt-1 text-[10px] font-bold uppercase ${
+                          sample.overallStatus === 'COMPLIANT'
+                            ? 'text-compliant'
+                            : sample.overallStatus === 'NON_COMPLIANT'
+                            ? 'text-noncompliant'
+                            : 'text-attention'
+                        }`}
+                      >
+                        {sample.overallStatus === 'COMPLIANT'
+                          ? 'Pass Sample'
+                          : sample.overallStatus === 'NON_COMPLIANT'
+                          ? 'Fail Sample'
+                          : 'Warning Sample'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           ) : (
@@ -213,7 +287,7 @@ export default function ScanProduct() {
                     <div className="min-w-0">
                       <p className="truncate font-semibold text-navy">{file.name}</p>
                       <p className="mt-1 text-sm text-navy/60">
-                        {formatFileSize(file.size)}
+                        {file.size ? formatFileSize(file.size) : 'Ready for scan'}
                       </p>
                     </div>
                   </div>
@@ -222,7 +296,7 @@ export default function ScanProduct() {
                 <Button
                   type="button"
                   className="w-full"
-                  onClick={() => navigate(ROUTES.PROCESSING)}
+                  onClick={handleAnalyze}
                 >
                   <ScanSearch className="h-4 w-4" aria-hidden="true" />
                   Analyze Product
@@ -237,8 +311,8 @@ export default function ScanProduct() {
                   Remove Image
                 </Button>
                 <p className="text-xs leading-relaxed text-navy/55">
-                  Analyze Product will open the processing screen. No OCR or
-                  backend call is made in this version.
+                  Clicking Analyze Product initiates the multi-stage Legal Metrology
+                  inspection pipeline.
                 </p>
               </div>
             </div>
