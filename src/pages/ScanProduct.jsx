@@ -2,7 +2,6 @@ import {
   AlertCircle,
   ArrowLeft,
   Camera,
-  CheckCircle2,
   FileImage,
   ScanSearch,
   Sparkles,

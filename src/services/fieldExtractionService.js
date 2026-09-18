@@ -39,8 +39,13 @@ const MANUFACTURER_LABELS = [
   'manufactured by',
   'marketed by',
   'packed by',
+  'manufactured for',
+  'marketed for',
+  'packed for',
   'packer',
   'manufacturer',
+  'mfd for',
+  'mfg for',
   'mfd by',
   'mfg by',
 ];
@@ -102,12 +107,16 @@ const EXPIRY_LABELS = [
 ];
 
 const CARE_LABELS = [
+  'consumer care details',
   'consumer care',
+  'customer care details',
   'customer care',
   'customer service',
   'toll free',
   'helpline',
   'careline',
+  'grievance officer',
+  'grievance cell',
   'grievance',
   'contact us',
   'contact',
@@ -133,12 +142,19 @@ const ALL_STOP_LABELS = uniqueByLength([
   ...COUNTRY_LABELS,
   'ingredients',
   'nutrition',
+  'batch no',
   'batch',
   'lot no',
   'b.no',
+  'fssai lic',
   'fssai',
+  'license no',
   'license',
   'lic no',
+  'cin:',
+  'regd. office',
+  'registered office',
+  'feedback',
 ]);
 
 const COUNTRY_NAMES = [
@@ -348,21 +364,41 @@ function looksLikeDate(value) {
   if (!value) return false;
   return (
     /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/i.test(value) ||
-    /\b\d{1,2}[\/\-.\s]\d{1,2}[\/\-.\s]\d{2,4}\b/.test(value) ||
-    /\b\d{1,2}[\/\-.\s]\d{4}\b/.test(value) ||
+    /\b\d{1,2}[/\-.\s]\d{1,2}[/\-.\s]\d{2,4}\b/.test(value) ||
+    /\b\d{1,2}[/\-.\s]\d{4}\b/.test(value) ||
     /\b(?:19|20)\d{2}\b/.test(value) ||
     /\b\d+\s*(?:month|months|year|years|days)\b/i.test(value)
   );
 }
 
 function looksLikeQuantity(value) {
-  return /\d+(?:[.,]\d+)?\s*(?:kg|g|gm|gms|gram|grams|ml|l|ltr|litre|liter|liters|oz)\b/i.test(
+  return /\d+(?:[.,]\d+)?\s*(?:kg|g|gm|gms|gram|grams|mg|ml|l|ltr|litre|liter|liters|oz)\b/i.test(
     value,
   );
 }
 
 function looksLikePrice(value) {
   return /(?:₹|rs\.?|inr|mrp)\s*[\d,]+(?:\.\d{1,2})?|\b[\d,]+\.\d{2}\b/i.test(value);
+}
+
+function formatConciseMrp(rawValue) {
+  if (!rawValue) return null;
+  const str = String(rawValue).trim();
+  const match = str.match(
+    /(?:(?:m\.?r\.?p\.?|maximum retail price|retail sale price)\s*[:.-]?\s*)?(?:₹|rs\.?|inr)\s*[\d,]+(?:\.\d{1,2})?/i,
+  );
+  if (match && match[0].trim()) {
+    let snippet = match[0].trim();
+    if (/^m\.?r\.?p\.?\s*\d/i.test(snippet)) {
+      snippet = snippet.replace(/^m\.?r\.?p\.?\s*/i, 'MRP ₹');
+    }
+    return snippet;
+  }
+  const digitMatch = str.match(/(?:₹|rs\.?|inr)?\s*[\d,]+(?:\.\d{2})/i);
+  if (digitMatch && digitMatch[0].trim()) {
+    return digitMatch[0].trim();
+  }
+  return cleanValue(str.split(/[(\n]/)[0]).slice(0, 30);
 }
 
 function extractManufacturer(text) {
@@ -405,7 +441,7 @@ function extractNetQuantity(text) {
   const labeled = blocks.find((block) => looksLikeQuantity(block.value));
   if (labeled) {
     const qtyMatch = labeled.value.match(
-      /\d+(?:[.,]\d+)?\s*(?:kg|g|gm|gms|gram|grams|ml|l|ltr|litre|liter|liters)(?:\s*\([^)]{0,40}\))?/i,
+      /\d+(?:[.,]\d+)?\s*(?:kg|g|gm|gms|gram|grams|mg|ml|l|ltr|litre|liter|liters)(?:\s*\([^)]{0,40}\))?/i,
     );
     const value = qtyMatch ? qtyMatch[0] : labeled.value;
     return field(value, EXTRACT_STATUS.FOUND, labeled.evidence);
@@ -415,7 +451,7 @@ function extractNetQuantity(text) {
   }
 
   const nearby = text.match(
-    /(?:net(?:\s+(?:quantity|qty|weight|wt|vol(?:ume)?))?|when packed)[^\n]{0,40}?(\d+(?:[.,]\d+)?\s*(?:kg|g|gm|ml|l|ltr))\b/i,
+    /(?:net(?:\s+(?:quantity|qty|weight|wt|vol(?:ume)?))?|when packed)[^\n]{0,40}?(\d+(?:[.,]\d+)?\s*(?:kg|g|gm|mg|ml|l|ltr|litre|liter))\b/i,
   );
   if (nearby) {
     return field(nearby[1], EXTRACT_STATUS.FOUND, nearby[0]);
@@ -428,17 +464,24 @@ function extractMrp(text) {
   const blocks = findLabeledBlocks(text, MRP_LABELS, { maxChars: 100, maxLines: 2 });
   const labeled = blocks.find((block) => looksLikePrice(block.value) || /\d/.test(block.value));
   if (labeled) {
+    const concise = formatConciseMrp(labeled.value) || labeled.value;
     const status = looksLikePrice(labeled.value) || /\d{1,7}/.test(labeled.value)
       ? EXTRACT_STATUS.FOUND
       : EXTRACT_STATUS.UNCERTAIN;
-    return field(labeled.value, status, labeled.evidence);
+    return field(concise, status, labeled.evidence);
   }
 
   const rupee = text.match(
-    /(?:mrp|maximum retail price|retail sale price)[^\n]{0,30}((?:₹|rs\.?|inr)?\s*[\d,]+(?:\.\d{1,2})?)/i,
+    /(?:m\.?r\.?p\.?|maximum retail price|retail sale price|max retail price)[^\n]{0,25}?((?:₹|rs\.?|inr)?\s*[\d,]+(?:\.\d{1,2})?)/i,
   );
   if (rupee) {
-    return field(rupee[0], EXTRACT_STATUS.FOUND, rupee[0]);
+    const concise = formatConciseMrp(rupee[0]) || rupee[0];
+    return field(concise, EXTRACT_STATUS.FOUND, rupee[0]);
+  }
+
+  const standaloneCurrency = text.match(/\b(?:₹|rs\.?)\s*[\d,]+(?:\.\d{1,2})?\b/i);
+  if (standaloneCurrency) {
+    return field(standaloneCurrency[0].trim(), EXTRACT_STATUS.FOUND, standaloneCurrency[0]);
   }
 
   return emptyField();
@@ -451,14 +494,16 @@ function extractMfgDate(text) {
     excludeStops: MFG_DATE_LABELS,
   }).filter((block) => {
     const label = block.label.toLowerCase();
-    if (/\bby\b/.test(label)) return false;
+    if (/\b(?:by|for)\b/i.test(label)) return false;
+    if (/^[:.\s-]*(&|and\b|by\b|for\b)/i.test(block.value)) return false;
     if (/^(manufactured|packed)$/i.test(label) && !looksLikeDate(block.value)) return false;
     return true;
   });
 
   const dated = blocks.find((block) => looksLikeDate(block.value));
   if (dated) {
-    return field(dated.value, EXTRACT_STATUS.FOUND, dated.evidence);
+    const conciseDate = cleanValue(dated.value).replace(/^(?:on|dated|dt\.?)\s*[:.-]?\s*/i, '');
+    return field(conciseDate, EXTRACT_STATUS.FOUND, dated.evidence);
   }
   if (blocks.length) {
     return field(blocks[0].value, EXTRACT_STATUS.UNCERTAIN, blocks[0].evidence);
@@ -490,30 +535,33 @@ function extractConsumerCare(text) {
   ].map((match) => match[0]);
 
   const blocks = findLabeledBlocks(text, CARE_LABELS, { maxChars: 140, maxLines: 3 });
-  const labeledValues = blocks.map((block) => block.value).filter(Boolean);
 
-  const parts = [...new Set([...labeledValues, ...emails, ...phones])]
-    .map(cleanValue)
-    .filter(Boolean);
-
-  if (!parts.length && !blocks.length) return emptyField();
-
-  const evidence = [...blocks.map((block) => block.evidence), ...emails, ...phones]
-    .filter(Boolean)
-    .join(' | ')
-    .slice(0, 300);
-
-  const hasConcrete = emails.length > 0 || phones.length > 0;
-  const labeledButThin = blocks.length > 0 && !hasConcrete && parts.every(looksThin);
-
-  if (hasConcrete || (parts.length && !labeledButThin)) {
-    const status = hasConcrete || parts.some((part) => part.length >= 6)
-      ? EXTRACT_STATUS.FOUND
-      : EXTRACT_STATUS.UNCERTAIN;
-    return field(parts.join(' | '), status, evidence);
+  // If explicit emails or phone numbers are found, extract only the concise contact line
+  const directContacts = [...new Set([...emails, ...phones])];
+  if (directContacts.length > 0) {
+    const evidence = [
+      ...blocks.map((b) => b.evidence),
+      ...directContacts,
+    ].filter(Boolean).join(' | ').slice(0, 300);
+    return field(directContacts.join(' | '), EXTRACT_STATUS.FOUND, evidence);
   }
 
-  return field(blocks[0]?.value, EXTRACT_STATUS.UNCERTAIN, evidence || blocks[0]?.evidence);
+  // If no direct emails/phones, use a concise line from the contact label without licenses or addresses
+  if (blocks.length > 0) {
+    const candidate = blocks[0].value;
+    const cleaned = cleanValue(
+      candidate
+        .replace(/\b(?:lic(?:\.|ense)?\s*(?:no\.?)?|fssai)\s*[:.-]?\s*\d+/gi, '')
+        .replace(/\b(?:pin|pincode)\s*[:.-]?\s*\d{6}\b/gi, '')
+    ).slice(0, 80);
+
+    if (cleaned && !looksThin(cleaned)) {
+      return field(cleaned, EXTRACT_STATUS.FOUND, blocks[0].evidence);
+    }
+    return field(candidate, EXTRACT_STATUS.UNCERTAIN, blocks[0].evidence);
+  }
+
+  return emptyField();
 }
 
 function extractCountry(text) {
@@ -531,7 +579,8 @@ function extractCountry(text) {
 
   const madeIn = text.match(/\bmade\s+(?:in|ln)\s+([A-Za-z][A-Za-z .]{1,30})/i);
   if (madeIn) {
-    const country = matchKnownCountry(madeIn[1]) || cleanValue(madeIn[1]);
+    const rawCountry = matchKnownCountry(madeIn[1]) || cleanValue(madeIn[1]);
+    const country = rawCountry ? rawCountry.charAt(0).toUpperCase() + rawCountry.slice(1) : '';
     const known = Boolean(matchKnownCountry(madeIn[1]));
     return field(
       `Made in ${country}`,

@@ -18,7 +18,6 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Card, { CardBody, CardHeader } from '../components/ui/Card';
-import StatusBadge from '../components/ui/StatusBadge';
 import { ROUTES } from '../constants/routes';
 import { COMPLIANCE_STATUS } from '../constants/status';
 import { DEMO_SAMPLES, useScan } from '../context/ScanContext';
