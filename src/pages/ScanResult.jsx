@@ -22,24 +22,63 @@ import StatusBadge from '../components/ui/StatusBadge';
 import { ROUTES } from '../constants/routes';
 import { COMPLIANCE_STATUS } from '../constants/status';
 import { DEMO_SAMPLES, useScan } from '../context/ScanContext';
+import {
+  EXTRACT_STATUS,
+  FIELD_DEFINITIONS,
+} from '../services/fieldExtractionService';
+
+function fieldDisplayValue(item) {
+  if (item?.status === EXTRACT_STATUS.NOT_FOUND || !item?.value) {
+    return 'Not found in OCR';
+  }
+  return item.value;
+}
+
+function fieldStatusLabel(status) {
+  if (status === EXTRACT_STATUS.FOUND) return 'FOUND';
+  if (status === EXTRACT_STATUS.UNCERTAIN) return 'UNCERTAIN';
+  return 'NOT_FOUND';
+}
+
+function fieldStatusHint(item) {
+  if (item?.status === EXTRACT_STATUS.NOT_FOUND) {
+    return 'This information was not reliably extracted from OCR. That does not automatically mean the label is legally non-compliant.';
+  }
+  if (item?.status === EXTRACT_STATUS.UNCERTAIN) {
+    return 'The OCR evidence for this field is ambiguous. The value is shown only when a possible snippet was found.';
+  }
+  return 'Value is supported by the OCR evidence below.';
+}
 
 export default function ScanResult() {
   const navigate = useNavigate();
-  const { complianceResult, previewUrl, file, resetScan, loadDemoSample } = useScan();
-  const [activeTab, setActiveTab] = useState('all'); // 'all' | 'violations'
+  const {
+    complianceResult,
+    extractedFields,
+    rawOcrText,
+    previewUrl,
+    file,
+    resetScan,
+    loadDemoSample,
+  } = useScan();
+  const [activeTab, setActiveTab] = useState('all');
   const [expandedCheckId, setExpandedCheckId] = useState(null);
+  const [showRawOcr, setShowRawOcr] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
 
-  // Fallback to sample compliant product if user hits /scan/result directly without prior scan
-  const result = complianceResult || DEMO_SAMPLES[0];
-  const displayImage = previewUrl || result.previewUrl;
+  const isDemoScan = Boolean(file?.isDemo || file?.demoId || complianceResult && !complianceResult.source);
+  const result = complianceResult;
+  const fields = extractedFields || result?.extractedFields || null;
+  const ocrText = rawOcrText || result?.rawOcrText || '';
+  const displayImage = previewUrl || result?.previewUrl;
+  const compliancePending = Boolean(result?.source === 'live' || result?.overallStatus === 'PENDING' || (!isDemoScan && result && result.score == null));
+  const hasScan = Boolean(result || fields || file || previewUrl);
 
-  const status = result.overallStatus || COMPLIANCE_STATUS.COMPLIANT;
-  const checks = result.checks || [];
-  const violations = result.violations || [];
-  const score = result.score || 0;
+  const status = result?.overallStatus || (compliancePending ? 'PENDING' : COMPLIANCE_STATUS.COMPLIANT);
+  const checks = result?.checks || [];
+  const violations = result?.violations || [];
+  const score = result?.score;
 
-  // Filter checks
   const filteredChecks =
     activeTab === 'violations'
       ? checks.filter((c) => c.status === 'FAIL' || c.status === 'WARNING')
@@ -99,10 +138,12 @@ export default function ScanResult() {
             </span>
           </div>
           <h1 className="mt-1 font-display text-2xl font-semibold text-navy sm:text-3xl">
-            {result.name || file?.name || 'Packaged Commodity Inspection'}
+            {result?.name || file?.name || 'Packaged Commodity Inspection'}
           </h1>
           <p className="mt-1 text-xs text-navy/60">
-            Automated label analysis completed · Phase 1 evaluation view
+            {compliancePending
+              ? 'OCR and structured field extraction completed · Compliance scoring deferred'
+              : 'Automated label analysis completed'}
           </p>
         </div>
 
@@ -118,10 +159,29 @@ export default function ScanResult() {
         </div>
       </div>
 
-      {/* Hero Status & Score Banner */}
+      {!hasScan ? (
+        <Card>
+          <CardBody className="p-8 text-center">
+            <HelpCircle className="mx-auto h-8 w-8 text-navy/40" />
+            <h2 className="mt-3 font-display text-xl font-semibold text-navy">
+              No scan is available
+            </h2>
+            <p className="mt-2 text-sm text-navy/65">
+              Upload a label image or choose a demo sample to extract declaration fields.
+            </p>
+            <Button as={Link} to={ROUTES.SCAN} className="mt-4">
+              Go to Scan Product
+            </Button>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      {hasScan ? (
       <section
         className={`relative overflow-hidden rounded-xl border p-6 text-white shadow-sm transition-colors ${
-          status === COMPLIANCE_STATUS.COMPLIANT
+          compliancePending
+            ? 'border-navy/30 bg-gradient-to-r from-navy to-navy-800'
+            : status === COMPLIANCE_STATUS.COMPLIANT
             ? 'border-compliant/40 bg-gradient-to-r from-compliant to-emerald-800'
             : status === COMPLIANCE_STATUS.NON_COMPLIANT
             ? 'border-noncompliant/40 bg-gradient-to-r from-noncompliant to-red-900'
@@ -131,7 +191,11 @@ export default function ScanResult() {
         <div className="grid gap-6 md:grid-cols-[1.5fr_1fr] md:items-center">
           <div className="space-y-3">
             <div className="flex items-center gap-3">
-              {status === COMPLIANCE_STATUS.COMPLIANT ? (
+              {compliancePending ? (
+                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white">
+                  <FileCheck2 className="h-7 w-7" />
+                </span>
+              ) : status === COMPLIANCE_STATUS.COMPLIANT ? (
                 <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white">
                   <ShieldCheck className="h-7 w-7" />
                 </span>
@@ -147,10 +211,12 @@ export default function ScanResult() {
 
               <div>
                 <p className="text-xs font-semibold tracking-wider text-white/80 uppercase">
-                  Overall Compliance Assessment
+                  {compliancePending ? 'Compliance Status' : 'Overall Compliance Assessment'}
                 </p>
                 <h2 className="font-display text-2xl font-bold tracking-tight sm:text-3xl">
-                  {status === COMPLIANCE_STATUS.COMPLIANT
+                  {compliancePending
+                    ? 'Not yet verified'
+                    : status === COMPLIANCE_STATUS.COMPLIANT
                     ? 'PASSED · Fully Compliant'
                     : status === COMPLIANCE_STATUS.NON_COMPLIANT
                     ? 'FAILED · Violations Detected'
@@ -160,10 +226,15 @@ export default function ScanResult() {
             </div>
 
             <p className="text-sm leading-relaxed text-white/90 max-w-2xl">
-              {result.summary}
+              {result?.summary ||
+                'Structured fields were extracted from the label. Legal compliance scoring has not been applied.'}
             </p>
 
-            {/* Quick Metrics Bar */}
+            {compliancePending ? (
+              <p className="text-xs text-white/80">
+                Compliance verification pending. Extraction status is not a legal pass or fail result.
+              </p>
+            ) : (
             <div className="flex flex-wrap items-center gap-4 pt-2 text-xs font-medium text-white/85">
               <span className="inline-flex items-center gap-1.5 rounded-md bg-white/15 px-2.5 py-1">
                 <CheckCircle2 className="h-4 w-4 text-emerald-300" />
@@ -178,27 +249,111 @@ export default function ScanResult() {
                 {failedCount} Violations
               </span>
             </div>
+            )}
           </div>
 
-          {/* Right: Circular Score Meter */}
           <div className="flex flex-col items-center justify-center rounded-lg border border-white/20 bg-white/10 p-5 text-center backdrop-blur-xs">
             <p className="text-xs font-semibold tracking-wider text-white/80 uppercase">
-              Compliance Index
+              {compliancePending ? 'Compliance Index' : 'Compliance Index'}
             </p>
-            <div className="relative mt-2 flex h-24 w-24 items-center justify-center rounded-full border-4 border-white/30 bg-black/20">
-              <span className="font-display text-3xl font-bold text-white">{score}%</span>
+            <div className="relative mt-2 flex min-h-24 min-w-24 items-center justify-center rounded-full border-4 border-white/30 bg-black/20 px-3">
+              {compliancePending || score == null ? (
+                <span className="font-display text-sm font-bold leading-tight text-white">
+                  Pending
+                </span>
+              ) : (
+                <span className="font-display text-3xl font-bold text-white">{score}%</span>
+              )}
             </div>
             <p className="mt-2 text-xs text-white/75">
-              Legal Metrology Standard Grade
+              {compliancePending ? 'Not yet verified' : 'Legal Metrology Standard Grade'}
             </p>
           </div>
         </div>
       </section>
+      ) : null}
 
       {/* Main Inspection Body */}
       <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
-        {/* Left: The 8 Legal Metrology Checklist Cards */}
         <div className="space-y-4">
+          {fields ? (
+            <Card>
+              <CardHeader>
+                <h3 className="font-display text-lg font-semibold text-navy">
+                  Extracted Label Information
+                </h3>
+                <p className="text-xs text-navy/60">
+                  Eight declaration fields mapped from OCR evidence. Status describes extraction confidence, not legal compliance.
+                </p>
+              </CardHeader>
+              <CardBody className="p-4 space-y-3">
+                {FIELD_DEFINITIONS.map((definition) => {
+                  const item = fields[definition.key] || {
+                    value: null,
+                    status: EXTRACT_STATUS.NOT_FOUND,
+                    evidence: null,
+                  };
+                  const statusKey = fieldStatusLabel(item.status);
+                  return (
+                    <div
+                      key={definition.key}
+                      className={`rounded-lg border p-4 ${
+                        statusKey === 'FOUND'
+                          ? 'border-compliant/25 bg-compliant/5'
+                          : statusKey === 'UNCERTAIN'
+                          ? 'border-attention/30 bg-attention/5'
+                          : 'border-navy/10 bg-surface/70'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <p className="font-semibold text-sm text-navy">{definition.label}</p>
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-wide uppercase ${
+                            statusKey === 'FOUND'
+                              ? 'bg-compliant/10 text-compliant'
+                              : statusKey === 'UNCERTAIN'
+                              ? 'bg-attention/10 text-attention'
+                              : 'bg-navy/10 text-navy/60'
+                          }`}
+                        >
+                          {statusKey}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-navy">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-navy/50">Value: </span>
+                        {fieldDisplayValue(item)}
+                      </p>
+                      <p className="mt-1 text-xs text-navy/65">{fieldStatusHint(item)}</p>
+                      <p className="mt-2 text-xs text-navy/70">
+                        <span className="font-semibold text-navy">Evidence: </span>
+                        {item.evidence ? item.evidence : 'No OCR evidence'}
+                      </p>
+                    </div>
+                  );
+                })}
+
+                {ocrText ? (
+                  <div className="rounded-lg border border-navy/10 bg-white p-3">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between text-sm font-semibold text-navy"
+                      onClick={() => setShowRawOcr((open) => !open)}
+                    >
+                      Raw OCR text
+                      {showRawOcr ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </button>
+                    {showRawOcr ? (
+                      <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded-md bg-surface p-3 text-xs text-navy/80">
+                        {ocrText}
+                      </pre>
+                    ) : null}
+                  </div>
+                ) : null}
+              </CardBody>
+            </Card>
+          ) : null}
+
+          {checks.length > 0 ? (
           <Card>
             <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
@@ -348,8 +503,8 @@ export default function ScanResult() {
               )}
             </CardBody>
           </Card>
+          ) : null}
 
-          {/* Critical Violations Callout if any */}
           {violations.length > 0 ? (
             <Card className="border-noncompliant/30 bg-noncompliant/5">
               <CardBody className="p-4">
@@ -394,11 +549,11 @@ export default function ScanResult() {
               <div className="mt-3 space-y-1.5 text-xs text-navy/70">
                 <div className="flex justify-between">
                   <span className="text-navy/55">Product:</span>
-                  <span className="font-medium text-navy">{result.name || 'Sample Pack'}</span>
+                  <span className="font-medium text-navy">{result?.name || file?.name || 'Uploaded label'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-navy/55">Category:</span>
-                  <span className="font-medium text-navy">{result.category || 'Packaged Commodity'}</span>
+                  <span className="font-medium text-navy">{result?.category || 'Packaged Commodity'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-navy/55">Audit Timestamp:</span>
@@ -435,7 +590,7 @@ export default function ScanResult() {
                       showToast(`Switched to: ${sample.name}`);
                     }}
                     className={`flex items-center justify-between rounded-md border p-2 text-left transition-colors ${
-                      result.id === sample.id
+                      result?.id === sample.id
                         ? 'border-navy bg-white font-semibold text-navy shadow-xs'
                         : 'border-navy/10 bg-white/70 text-navy/75 hover:bg-white'
                     }`}

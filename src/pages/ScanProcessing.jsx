@@ -32,26 +32,24 @@ export default function ScanProcessing() {
     currentStepIndex,
     status,
     runProcessing,
-    loadDemoSample,
     resetScan,
     error,
   } = useScan();
 
   const startedRef = useRef(false);
 
-  // If user navigates directly to /processing without a file, load default demo sample
   useEffect(() => {
     if (!file && !previewUrl) {
-      loadDemoSample('demo-compliant');
+      navigate(ROUTES.SCAN, { replace: true });
     }
-  }, [file, previewUrl, loadDemoSample]);
+  }, [file, previewUrl, navigate]);
 
-  // Launch inspection pipeline once on mount
   useEffect(() => {
+    if (!file && !previewUrl) return;
     if (startedRef.current) return;
     startedRef.current = true;
     runProcessing();
-  }, [runProcessing]);
+  }, [file, previewUrl, runProcessing]);
 
   // Reactive transition: Automatically navigate to /scan/result when completed
   useEffect(() => {
@@ -62,16 +60,6 @@ export default function ScanProcessing() {
       return () => clearTimeout(timer);
     }
   }, [status, progress, navigate]);
-
-  // Safety fallback: in the unlikely event the pipeline exceeds 6s, guarantee transition
-  useEffect(() => {
-    const watchdog = setTimeout(() => {
-      if (status !== 'completed' && status !== 'error') {
-        navigate(ROUTES.RESULT, { replace: true });
-      }
-    }, 6000);
-    return () => clearTimeout(watchdog);
-  }, [status, navigate]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
@@ -89,7 +77,7 @@ export default function ScanProcessing() {
             Analyzing Packaged Product
           </h1>
           <p className="mt-2 text-sm text-navy/70">
-            Running OCR and compliance validation across 8 Legal Metrology declaration standards.
+            Running OCR, then structured extraction of the 8 mandatory declaration fields.
           </p>
         </div>
 
@@ -211,7 +199,7 @@ export default function ScanProcessing() {
               </div>
 
               <p className="mt-3 text-xs text-navy/60">
-                Simulated inspection pipeline (Phase 1). Live OCR & legal rule models will connect in Phase 2.
+                Live scans run OCR and structured field extraction. Legal compliance scoring is deferred.
               </p>
             </CardBody>
           </Card>

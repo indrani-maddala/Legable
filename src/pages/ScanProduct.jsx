@@ -74,6 +74,7 @@ export default function ScanProduct() {
     }
 
     setError('');
+    resetScan();
     setFile(nextFile);
     setPreviewUrl((currentUrl) => {
       if (currentUrl && currentUrl.startsWith('blob:')) {

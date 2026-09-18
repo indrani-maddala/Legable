@@ -1,13 +1,29 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import {
+  emptyExtraction,
+  extractFields,
+  extractedFieldsFromDemoChecks,
+} from '../services/fieldExtractionService';
+import { recognizeLabelText } from '../services/ocrService';
 
 const ScanContext = createContext(null);
 
 export const PROCESSING_STEPS = [
   { id: 'prep', title: 'Image preprocessing & enhancement', description: 'Checking resolution, perspective distortion, and contrast' },
-  { id: 'ocr', title: 'OCR text extraction', description: 'Detecting text lines, bounding boxes, and mandatory declarations' },
-  { id: 'rules', title: 'Legal Metrology validation (8 Rules)', description: 'Evaluating compliance against Legal Metrology (Packaged Commodities) Rules, 2011' },
-  { id: 'score', title: 'Compliance score generation', description: 'Calculating final grade, violation flags, and audit report' },
+  { id: 'ocr', title: 'OCR text extraction', description: 'Reading visible text from the uploaded or captured label image' },
+  { id: 'extract', title: 'Structured field extraction', description: 'Mapping OCR evidence to the 8 mandatory declaration fields' },
+  { id: 'assemble', title: 'Result assembly', description: 'Preparing extracted fields for review. Legal compliance scoring is deferred.' },
 ];
+
+function isDemoFile(selectedFile) {
+  return Boolean(selectedFile?.isDemo || selectedFile?.demoId);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 export const DEMO_SAMPLES = [
   {
@@ -281,9 +297,12 @@ export function ScanProvider({ children }) {
   const [progress, setProgress] = useState(0);
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [extractedData, setExtractedData] = useState(null);
+  const [extractedFields, setExtractedFields] = useState(null);
+  const [rawOcrText, setRawOcrText] = useState('');
   const [complianceResult, setComplianceResult] = useState(null);
   const [scanHistory, setScanHistory] = useState([]);
   const [error, setError] = useState('');
+  const processingIdRef = useRef(0);
 
   // Persistent reference to background timers so we can clean them up safely
   const timersRef = useRef([]);
@@ -303,13 +322,23 @@ export function ScanProvider({ children }) {
     };
   }, [clearTimers, previewUrl]);
 
+  const clearScanOutputs = useCallback(() => {
+    setExtractedData(null);
+    setExtractedFields(null);
+    setRawOcrText('');
+    setComplianceResult(null);
+    setError('');
+    setProgress(0);
+    setCurrentStepIndex(0);
+  }, []);
+
   /**
    * Initializes a scan with an uploaded or captured image file.
-   * If a demo sample was chosen, its result is preserved.
-   * If a user file is uploaded, assigns a structured default assessment ready for Phase 2.
+   * Demo samples keep curated data. Live uploads never inherit the previous scan.
    */
   const startScan = useCallback((selectedFile, objectUrl = '') => {
     clearTimers();
+    processingIdRef.current += 1;
 
     if (previewUrl && previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(previewUrl);
@@ -319,39 +348,23 @@ export function ScanProvider({ children }) {
     setFile(selectedFile);
     setPreviewUrl(finalUrl);
     setStatus('idle');
-    setProgress(0);
-    setCurrentStepIndex(0);
-    setError('');
+    clearScanOutputs();
 
-    // Check if this file corresponds to a demo sample
-    if (selectedFile?.demoId) {
+    if (isDemoFile(selectedFile)) {
       const sample = DEMO_SAMPLES.find((s) => s.id === selectedFile.demoId) || DEMO_SAMPLES[0];
+      const fields = extractedFieldsFromDemoChecks(sample.checks);
       setComplianceResult(sample);
       setExtractedData(sample);
-    } else {
-      // User uploaded custom file: assign structured initial result
-      const userResult = {
-        id: `scan-${Date.now()}`,
-        name: selectedFile?.name ? selectedFile.name.replace(/\.[^/.]+$/, '') : 'Packaged Commodity',
-        category: 'Packaged Commodity (General)',
-        previewUrl: finalUrl,
-        fileName: selectedFile?.name || 'label_image.jpg',
-        overallStatus: 'COMPLIANT',
-        score: 94,
-        summary: 'All 8 mandatory declarations evaluated against Legal Metrology (Packaged Commodities) Rules, 2011.',
-        violations: [],
-        checks: DEMO_SAMPLES[0].checks,
-      };
-      setComplianceResult(userResult);
-      setExtractedData(userResult);
+      setExtractedFields(fields);
     }
-  }, [clearTimers, previewUrl]);
+  }, [clearScanOutputs, clearTimers, previewUrl]);
 
   /**
    * Load one of the curated demo sample packaged commodities
    */
   const loadDemoSample = useCallback((sampleId) => {
     clearTimers();
+    processingIdRef.current += 1;
 
     const sample = DEMO_SAMPLES.find((item) => item.id === sampleId) || DEMO_SAMPLES[0];
     if (previewUrl && previewUrl.startsWith('blob:')) {
@@ -370,81 +383,168 @@ export function ScanProvider({ children }) {
     setProgress(0);
     setCurrentStepIndex(0);
     setError('');
+    setRawOcrText('');
     setExtractedData(sample);
+    setExtractedFields(extractedFieldsFromDemoChecks(sample.checks));
     setComplianceResult(sample);
   }, [clearTimers, previewUrl]);
 
+  const appendHistory = useCallback((activeResult, fields) => {
+    const newRecord = {
+      id: `SCN-${Math.floor(1000 + Math.random() * 9000)}`,
+      productName: activeResult.name || file?.name || 'Packaged Commodity',
+      scannedAt: new Date().toLocaleString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+      netQuantity:
+        fields?.netQuantity?.value ||
+        activeResult.checks?.find((c) => c.id === 'net_quantity')?.extracted ||
+        'N/A',
+      mrp:
+        fields?.mrp?.value ||
+        activeResult.checks?.find((c) => c.id === 'mrp_usp')?.extracted?.split('·')?.[0]?.trim() ||
+        'N/A',
+      status: activeResult.overallStatus,
+      score: activeResult.score,
+    };
+    setScanHistory((prev) => [newRecord, ...prev]);
+  }, [file]);
+
   /**
-   * Orchestrates the multi-stage inspection pipeline.
-   * Progresses reliably through:
-   * - 10% (Preprocessing)
-   * - 35% (OCR Extraction)
-   * - 70% (Legal Metrology Validation)
-   * - 90% (Compliance Scoring)
-   * - 100% (Completed)
+   * Demo samples keep a short staged animation and curated results.
+   * Live images run OCR, then structured extraction, with no compliance score.
    */
   const runProcessing = useCallback(() => {
     clearTimers();
+    const runId = processingIdRef.current + 1;
+    processingIdRef.current = runId;
 
     setStatus('processing');
     setProgress(10);
     setCurrentStepIndex(0);
     setError('');
 
-    // Stage 1: Preprocessing & Enhancement (10% -> 35%)
-    timersRef.current.push(
-      setTimeout(() => {
-        setProgress(35);
+    const demoScan = isDemoFile(file);
+
+    if (demoScan) {
+      const sample =
+        DEMO_SAMPLES.find((item) => item.id === file?.demoId) ||
+        complianceResult ||
+        DEMO_SAMPLES[0];
+      const fields = extractedFieldsFromDemoChecks(sample.checks);
+
+      timersRef.current.push(
+        setTimeout(() => {
+          if (processingIdRef.current !== runId) return;
+          setProgress(35);
+          setCurrentStepIndex(1);
+        }, 500),
+      );
+      timersRef.current.push(
+        setTimeout(() => {
+          if (processingIdRef.current !== runId) return;
+          setProgress(70);
+          setCurrentStepIndex(2);
+          setExtractedFields(fields);
+        }, 1100),
+      );
+      timersRef.current.push(
+        setTimeout(() => {
+          if (processingIdRef.current !== runId) return;
+          setProgress(90);
+          setCurrentStepIndex(3);
+        }, 1700),
+      );
+      timersRef.current.push(
+        setTimeout(() => {
+          if (processingIdRef.current !== runId) return;
+          setRawOcrText('');
+          setExtractedFields(fields);
+          setExtractedData(sample);
+          setComplianceResult(sample);
+          setProgress(100);
+          setStatus('completed');
+          appendHistory(sample, fields);
+        }, 2300),
+      );
+      return;
+    }
+
+    (async () => {
+      try {
+        setRawOcrText('');
+        setExtractedFields(emptyExtraction());
+        setComplianceResult(null);
+
+        await sleep(350);
+        if (processingIdRef.current !== runId) return;
+
+        setProgress(22);
         setCurrentStepIndex(1);
-      }, 600)
-    );
 
-    // Stage 2: OCR Text Extraction (35% -> 70%)
-    timersRef.current.push(
-      setTimeout(() => {
-        setProgress(70);
+        const imageSource = file instanceof Blob ? file : previewUrl;
+        if (!imageSource) {
+          throw new Error('No image is available to analyze.');
+        }
+
+        const ocr = await recognizeLabelText(imageSource, (ratio) => {
+          if (processingIdRef.current !== runId) return;
+          setProgress(22 + Math.round(ratio * 48));
+        });
+        if (processingIdRef.current !== runId) return;
+
+        const ocrText = ocr.text || '';
+        setRawOcrText(ocrText);
+        setProgress(74);
         setCurrentStepIndex(2);
-      }, 1400)
-    );
+        await sleep(200);
+        if (processingIdRef.current !== runId) return;
 
-    // Stage 3: Legal Metrology Rules Check (70% -> 90%)
-    timersRef.current.push(
-      setTimeout(() => {
+        const fields = extractFields(ocrText);
+        setExtractedFields(fields);
         setProgress(90);
         setCurrentStepIndex(3);
-      }, 2200)
-    );
+        await sleep(200);
+        if (processingIdRef.current !== runId) return;
 
-    // Stage 4: Scoring & Completion (90% -> 100%)
-    timersRef.current.push(
-      setTimeout(() => {
+        const productTitle =
+          fields.productName.status === 'FOUND'
+            ? fields.productName.value
+            : file?.name || 'Uploaded label';
+
+        const liveResult = {
+          id: `scan-${Date.now()}`,
+          source: 'live',
+          name: productTitle,
+          category: 'Live OCR scan',
+          previewUrl,
+          fileName: file?.name || 'label_image.jpg',
+          overallStatus: 'PENDING',
+          score: null,
+          summary:
+            'Label text was read with OCR and mapped to structured declaration fields. Legal compliance verification is not yet applied. A field marked Not found means it was not reliably extracted, not that the package is legally non-compliant.',
+          violations: [],
+          checks: [],
+          extractedFields: fields,
+          rawOcrText: ocrText,
+        };
+
+        setExtractedData(fields);
+        setComplianceResult(liveResult);
         setProgress(100);
         setStatus('completed');
-
-        // Record to session history
-        setComplianceResult((currentResult) => {
-          const activeResult = currentResult || DEMO_SAMPLES[0];
-          const newRecord = {
-            id: `SCN-${Math.floor(1000 + Math.random() * 9000)}`,
-            productName: activeResult.name || file?.name || 'Packaged Commodity',
-            scannedAt: new Date().toLocaleString('en-IN', {
-              day: 'numeric',
-              month: 'short',
-              year: 'numeric',
-              hour: 'numeric',
-              minute: '2-digit',
-            }),
-            netQuantity: activeResult.checks?.find((c) => c.id === 'net_quantity')?.extracted || 'N/A',
-            mrp: activeResult.checks?.find((c) => c.id === 'mrp_usp')?.extracted?.split('·')?.[0]?.trim() || 'N/A',
-            status: activeResult.overallStatus,
-            score: activeResult.score,
-          };
-          setScanHistory((prev) => [newRecord, ...prev]);
-          return activeResult;
-        });
-      }, 2900)
-    );
-  }, [clearTimers, file]);
+        appendHistory(liveResult, fields);
+      } catch (err) {
+        if (processingIdRef.current !== runId) return;
+        setStatus('error');
+        setError(err?.message || 'Unable to complete OCR and field extraction.');
+      }
+    })();
+  }, [appendHistory, clearTimers, complianceResult, file, previewUrl]);
 
   // Backward compatibility alias for runProcessing
   const runSimulation = runProcessing;
@@ -454,6 +554,7 @@ export function ScanProvider({ children }) {
    */
   const resetScan = useCallback(() => {
     clearTimers();
+    processingIdRef.current += 1;
     if (previewUrl && previewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(previewUrl);
     }
@@ -464,6 +565,8 @@ export function ScanProvider({ children }) {
     setCurrentStepIndex(0);
     setError('');
     setExtractedData(null);
+    setExtractedFields(null);
+    setRawOcrText('');
     setComplianceResult(null);
   }, [clearTimers, previewUrl]);
 
@@ -476,6 +579,8 @@ export function ScanProvider({ children }) {
     currentStep: PROCESSING_STEPS[currentStepIndex] || PROCESSING_STEPS[0],
     steps: PROCESSING_STEPS,
     extractedData,
+    extractedFields,
+    rawOcrText,
     complianceResult,
     scanHistory,
     error,
