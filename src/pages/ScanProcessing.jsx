@@ -77,7 +77,7 @@ export default function ScanProcessing() {
             Analyzing Packaged Product
           </h1>
           <p className="mt-2 text-sm text-navy/70">
-            Running OCR, then structured extraction of the 8 mandatory declaration fields.
+            Running OCR, extracting structured label fields, and evaluating Legal Metrology Rules, 2011 compliance.
           </p>
         </div>
 

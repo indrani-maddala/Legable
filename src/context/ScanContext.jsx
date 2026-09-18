@@ -4,6 +4,7 @@ import {
   extractFields,
   extractedFieldsFromDemoChecks,
 } from '../services/fieldExtractionService';
+import { evaluateCompliance } from '../services/complianceService';
 import { recognizeLabelText } from '../services/ocrService';
 
 const ScanContext = createContext(null);
@@ -11,8 +12,8 @@ const ScanContext = createContext(null);
 export const PROCESSING_STEPS = [
   { id: 'prep', title: 'Image preprocessing & enhancement', description: 'Checking resolution, perspective distortion, and contrast' },
   { id: 'ocr', title: 'OCR text extraction', description: 'Reading visible text from the uploaded or captured label image' },
-  { id: 'extract', title: 'Structured field extraction', description: 'Mapping OCR evidence to the 8 mandatory declaration fields' },
-  { id: 'assemble', title: 'Result assembly', description: 'Preparing extracted fields for review. Legal compliance scoring is deferred.' },
+  { id: 'rules', title: 'Legal Metrology validation (8 Rules)', description: 'Evaluating mandatory declarations against Legal Metrology (Packaged Commodities) Rules, 2011' },
+  { id: 'score', title: 'Compliance score & audit generation', description: 'Calculating transparent compliance index, violation flags, and audit summary' },
 ];
 
 function isDemoFile(selectedFile) {
@@ -506,9 +507,15 @@ export function ScanProvider({ children }) {
 
         const fields = extractFields(ocrText);
         setExtractedFields(fields);
+        setProgress(70);
+        setCurrentStepIndex(2);
+        await sleep(250);
+        if (processingIdRef.current !== runId) return;
+
+        const compliance = evaluateCompliance(fields, { rawOcrText: ocrText });
         setProgress(90);
         setCurrentStepIndex(3);
-        await sleep(200);
+        await sleep(250);
         if (processingIdRef.current !== runId) return;
 
         const productTitle =
@@ -523,12 +530,18 @@ export function ScanProvider({ children }) {
           category: 'Live OCR scan',
           previewUrl,
           fileName: file?.name || 'label_image.jpg',
-          overallStatus: 'PENDING',
-          score: null,
-          summary:
-            'Label text was read with OCR and mapped to structured declaration fields. Legal compliance verification is not yet applied. A field marked Not found means it was not reliably extracted, not that the package is legally non-compliant.',
-          violations: [],
-          checks: [],
+          overallStatus: compliance.overallStatus,
+          score: compliance.score,
+          scoreStatus: compliance.scoreStatus,
+          scoreExplanation: compliance.scoreExplanation,
+          summary: compliance.summary,
+          violations: compliance.actionItems.filter((item) => item.type === 'VIOLATION'),
+          actionItems: compliance.actionItems,
+          checks: compliance.checks,
+          verifiedCount: compliance.verifiedCount,
+          failedCount: compliance.failedCount,
+          warningCount: compliance.warningCount,
+          unverifiedCount: compliance.unverifiedCount,
           extractedFields: fields,
           rawOcrText: ocrText,
         };
